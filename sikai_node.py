@@ -201,7 +201,7 @@ class OpenAIDAlleNode:
                     "default": False
                 }),
                 "APIKey": ("STRING", {
-                    "default": "hypr-lab-f5aBH69oHEJ03dD31G56T3BlbkFJfBjLrpUdAJiXLQYyMHUB"
+                    "default": "hypr-lab-123456789"
                 }),
                 "EndpointADDRESS": ("STRING", {
                     "default": "https://api.hyprlab.io/v1/chat/completions"
