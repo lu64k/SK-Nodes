@@ -9,6 +9,7 @@ import requests
 import numpy as np  # 用于处理 NumPy 数组
 import random
 import cv2
+import kornia
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
 
@@ -16,7 +17,7 @@ from io import BytesIO
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
-class SK_Random_File_Name:
+class LoadAnyLLM:
     def __init__(self):
         pass
 
@@ -24,55 +25,29 @@ class SK_Random_File_Name:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "folder_path": ("STRING", {"default": '', "multiline": False}),  # 输入文件夹路径
-                "seed": ("INT", {"default": 0}),  # 全局 seed
-                "fix_random": ("BOOLEAN", {"default": True})  # 控制是否固定随机性 (fix/random)
+                "LLM_NAME": ("STRING", {"default": "microsoft/Phi-3.5-mini-instruct",
+                "multiline": False
+                }),
+
             }
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("file_name_without_extension", "file_name_with_extension", "full_file_path")
-    FUNCTION = "get_random_file_name"
+    RETURN_TYPES = ("MODEL", "TOKENIZER")
+    RETURN_NAMES = ("LocalLLM", "tokenizer")
+    FUNCTION = "load_model"
+    CATEGORY = "Sikai_nodes/LLM"
 
-    CATEGORY = "Sikai_nodes/tools"
+    def load_model(self, LLM_NAME):
+        model = AutoModelForCausalLM.from_pretrained(
+            LLM_NAME,
+            device_map="cuda",
+            torch_dtype="auto",
+            trust_remote_code=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(LLM_NAME)
+        return model, tokenizer
 
-    def get_random_file_name(self, folder_path, seed, fix_random):
-        """
-        随机读取文件夹中的一个文件，去掉后缀和完整文件名分别输出，此外输出完整路径。
-        如果 fix_random 为 True，使用传入的 seed 值；否则使用真正的随机性。
-        """
-        # 如果 fix_random 为 True，使用 seed 进行固定的随机行为
-        if fix_random:
-            random.seed(seed)
-        else:
-            # 如果 fix_random 为 False，使用系统时间或其他不固定的随机行为
-            random.seed(None)  # 让随机性基于系统时间
-
-        # 检查文件夹是否存在
-        if not os.path.isdir(folder_path):
-            return ("Error: Folder not found", "", "")
-
-        # 获取文件夹中的所有文件
-        files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
-        
-        # 如果文件夹为空，返回错误信息
-        if not files:
-            return ("Error: No files in folder", "", "")
-
-        # 随机选择一个文件
-        random_file = random.choice(files)
-
-        # 获取文件名和扩展名
-        file_name_without_extension = os.path.splitext(random_file)[0]
-        file_name_with_extension = random_file
-
-        # 获取完整路径
-        full_file_path = os.path.join(folder_path, random_file)
-
-        # 返回去除后缀的文件名、带后缀的完整文件名和完整文件路径
-        return (file_name_without_extension, file_name_with_extension, full_file_path)
-        
-class SK_Text_String:
+class GenerateTextFromLLM:
     def __init__(self):
         pass
 
@@ -80,27 +55,210 @@ class SK_Text_String:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": ("STRING", {"default": '', "multiline": True}),
+                "model": ("MODEL",),
+                "tokenizer": ("TOKENIZER",),
+                "Prompt": ("STRING", {"default": "how far is light year?", "multiline": True}),
+                "system_instruction": ("STRING", {"default": "You are creating a prompt for Stable Diffusion to generate an image. First step: understand the input and generate a text prompt for the input. Second step: only respond in English with the prompt itself in phrase, but embellish it as needed but keep it under 200 tokens.", "multiline": True}),
+                "temperature": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 2.0, "step": 0.1}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("generated_text",)
+    FUNCTION = "generate_content"
+    CATEGORY = "LocalLLM"
+
+    def generate_content(self, model, tokenizer, Prompt, system_instruction, temperature):
+
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": Prompt},
+        ]
+
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+        )
+
+        generation_args = {
+            "max_new_tokens": 500,
+            "return_full_text": False,
+            "temperature": temperature,
+            "do_sample": False,
+        }
+
+        output = pipe(messages, **generation_args)
+        textoutput = output[0]['generated_text']
+
+        return (textoutput,)
+
+class OpenAIDAlleNode:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "instruction": ("STRING", {  # 提供给 GPT 的专门化指导
+                    "default": "you are a professional prompt engineer specializing in crafting detailed and precise prompts for stable diffusion models...",
+                    "multiline": True
+                }),
+                "prompt": ("STRING", {  # 任务的具体内容
+                    "default": "Describe this image",
+                    "multiline": True
+                }),
+                "output_Image": ("BOOLEAN", {  # 用户选择是否输出图片
+                    "default": False
+                }),
+                "input_Image": ("BOOLEAN", {  # 用户选择是否输入图片
+                    "default": False
+                }),
+                "APIKey": ("STRING", {
+                    "default": "hypr-lab-f5aBH69oHEJ03dD31G56T3BlbkFJfBjLrpUdAJiXLQYyMHUB"
+                }),
+                "EndpointADDRESS": ("STRING", {
+                    "default": "https://api.hyprlab.io/v1/chat/completions"
+                }),
+                "ModelName": ("STRING", {
+                    "default": "gpt-4"
+                })
             },
             "optional": {
-                "text_b": ("STRING", {"default": '', "multiline": True}),
-                "text_c": ("STRING", {"default": '', "multiline": True}),
-                "text_d": ("STRING", {"default": '', "multiline": True}),
+                "Referimage": ("IMAGE",)  # 可选图片输入
             }
         }
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("output_text", "output_text_b", "output_text_c", "output_text_d")
-    FUNCTION = "text_string"
 
-    CATEGORY = "Sikai_nodes/tools"
+    RETURN_TYPES = ("STRING", "IMAGE")
+    RETURN_NAMES = ("output_text", "output_image")
+    FUNCTION = "generate_output"
+    CATEGORY = "Sikai_nodes/LLM"
 
-    def text_string(self, text, text_b='', text_c='', text_d=''):
-        """
-        处理输入的四组文本，并分别返回。
-        如果没有提供 text_b, text_c, text_d，使用默认空字符串。
-        """
-        # 返回四个字符串
-        return (text, text_b, text_c, text_d)
+    def generate_output(self, instruction, prompt, output_Image, input_Image, Referimage, APIKey, ModelName, EndpointADDRESS):
+        api_key = APIKey
+        endpoint = EndpointADDRESS
+        
+        combined_prompt = f"{instruction}\n\n{prompt}"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        # 准备请求数据
+        data = {
+            "model": ModelName,  # GPT 模型描述图像，但生成图像时需要调用 DALL·E 3
+            "messages": [
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": prompt}
+            ]
+        }
+
+        output_text = ""
+        output_image = None
+
+        # 将 Tensor 转换为 PIL 图像
+        def convert_tensor_to_image(tensor_image):
+            # 如果图像是 Tensor，将其转换为 PIL 图像
+            if isinstance(tensor_image, torch.Tensor):
+                # 首先移除多余的维度
+                tensor_image = tensor_image.squeeze()  # 去掉 (1, 1, ...) 的维度
+
+                # 确保数据的形状为 (height, width, channels)
+                if tensor_image.dim() == 3 and tensor_image.size(2) == 3:
+                    # 转换 Tensor 为 NumPy 数组，并确保类型为 uint8
+                    np_image = tensor_image.mul(255).byte().cpu().numpy()
+                    pil_image = Image.fromarray(np_image)
+                    return pil_image
+                else:
+                    raise ValueError(f"Unexpected image shape: {tensor_image.size()}")
+            return tensor_image
+
+        # 情况 1: input_Image=True 且 output_Image=True -> 描述图片并生成图像
+        if input_Image and output_Image:
+            try:
+                if Referimage is not None:  # 只处理非 None 的图片对象
+                    # 如果 Referimage 是 Tensor，先转换为 PIL 图像
+                    Referimage = convert_tensor_to_image(Referimage)
+                    
+                    # 转换图片为字节流
+                    image_bytes = BytesIO()
+                    Referimage.save(image_bytes, format='PNG')
+                    image_data = image_bytes.getvalue()
+
+                    # 调用 API 描述图片
+                    description_response = requests.post(endpoint, headers=headers, json=data)
+                    description_response.raise_for_status()
+                    json_response = description_response.json()
+                    output_text = json_response["choices"][0]["message"]["content"].strip()
+
+                    # 生成图像（使用 DALL·E 3）
+                    image_generation_response = requests.post(endpoint, headers=headers, json={
+                        "model": "DALL·E 3",  # 使用 DALL·E 3 生成图像
+                        "prompt": output_text,
+                        "n": 1,
+                        "size": "1024x1024"
+                    })
+                    image_generation_response.raise_for_status()
+                    image_url = image_generation_response.json()['data'][0]['url']
+                    img_data = requests.get(image_url).content
+                    output_image = Image.open(BytesIO(img_data))
+                    return (output_text, output_image)
+                else:
+                    return ("Error: No image provided for description.", None)
+            except Exception as e:
+                return (f"Error processing image and generating new image: {str(e)}", None)
+
+        # 情况 2: input_Image=True 且 output_Image=False -> 描述图片，输出文本
+        elif input_Image and not output_Image:
+            try:
+                if Referimage is not None:  # 确认图片非 None
+                    Referimage = convert_tensor_to_image(Referimage)
+                    
+                    image_bytes = BytesIO()
+                    Referimage.save(image_bytes, format='PNG')
+                    image_data = image_bytes.getvalue()
+
+                    # 调用 API 描述图片
+                    description_response = requests.post(endpoint, headers=headers, json=data)
+                    description_response.raise_for_status()
+                    json_response = description_response.json()
+                    output_text = json_response["choices"][0]["message"]["content"].strip()
+                    return (output_text, None)
+                else:
+                    return ("Error: No image provided for description.", None)
+            except Exception as e:
+                return (f"Error processing image description: {str(e)}", None)
+
+        # 情况 3: input_Image=False 且 output_Image=True -> 生成图像
+        elif not input_Image and output_Image:
+            try:
+                # 根据 prompt 生成图像（使用 DALL·E 3）
+                image_generation_response = requests.post(endpoint, headers=headers, json={
+                    "model": "DALL·E 3",  # 使用 DALL·E 3 生成图像
+                    "prompt": combined_prompt,
+                    "n": 1,
+                    "size": "1024x1024"
+                })
+                image_generation_response.raise_for_status()
+                image_url = image_generation_response.json()['data'][0]['url']
+                img_data = requests.get(image_url).content
+                output_image = Image.open(BytesIO(img_data))
+                return (None, output_image)
+            except Exception as e:
+                return (f"Error generating image: {str(e)}", None)
+
+        # 情况 4: input_Image=False 且 output_Image=False -> 生成文本
+        else:
+            try:
+                # 生成文本
+                response = requests.post(endpoint, headers=headers, json=data)
+                response.raise_for_status()
+                json_response = response.json()
+                output_text = json_response["choices"][0]["message"]["content"].strip()
+                return (output_text, None)
+            except Exception as e:
+                return (f"Error generating text: {str(e)}", None)
 
 class OpenAI_Text_Node:
     def __init__(self):
@@ -182,6 +340,7 @@ class OpenAI_Text_Node:
                     return (backup_text,)
 
 
+
 class ToneLayerQuantize:
     def __init__(self):
         pass
@@ -248,6 +407,58 @@ class ToneLayerQuantize:
 
         return (result,)
 
+class ColorTransferToneLayer:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),  # 分层后的图像
+                "original_image": ("IMAGE",),  # 原始图像，用于颜色映射
+                "layers": ("INT", {  # 设置分层数量
+                    "default": 10,
+                    "min": 2,
+                    "max": 256,
+                    "step": 1
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "apply_color_transfer"
+
+    CATEGORY = "sikai nodes/postprocess"
+
+    def apply_color_transfer(self, image: torch.Tensor, original_image: torch.Tensor, layers: int = 5):
+        batch_size, height, width, _ = image.shape
+        result = torch.zeros_like(image)
+
+        # 定义分层的步长，控制每个层级的颜色范围
+        step = 255 // (layers - 1)
+
+        for b in range(batch_size):
+            # 原始图像和分层图像
+            tensor_image = image[b]
+            original_tensor_image = original_image[b]
+
+            img = (tensor_image * 255).to(torch.uint8).numpy()
+            original_img = (original_tensor_image * 255).to(torch.uint8).numpy()
+
+            # 对 R, G, B 每个通道分别进行分层处理
+            for i in range(3):  # 对应 RGB 三个通道
+                # 将像素值映射到指定的层级
+                img[:, :, i] = np.round(img[:, :, i] / step) * step
+
+            # 使用颜色映射，将原始图像的颜色重新映射回分层图像
+            img_colored = cv2.addWeighted(img, 0.5, original_img, 0.5, 0)
+
+            # 将处理后的图像转换为 torch.Tensor 格式并归一化
+            quantized_array = torch.tensor(img_colored).float() / 255
+            result[b] = quantized_array
+
+        return (result,)
 
 class NaturalSaturationAdjust:
     def __init__(self):
@@ -308,7 +519,6 @@ class NaturalSaturationAdjust:
             result[b] = torch.tensor(rgb_adjusted).float() / 255.0
 
         return (result,)
-
 
 class ImageTracingNode:
     def __init__(self):
@@ -464,47 +674,93 @@ class ImageTracingNode:
         layer_step = (max_val - min_val) / layers
         return torch.floor((channel - min_val) / layer_step) * layer_step + min_val
 
-class greyscaleblendNode:
-    def __init__(self):
-        pass
+import torch
+import kornia
 
+class greyscaleblendNode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image_BW": ("IMAGE",),  # 输入图像A
-                "image_Col": ("IMAGE",),  # 输入图像B
+                "image_BW": ("IMAGE",),  # Input grayscale image (batch)
+                "image_Col": ("IMAGE",),  # Input color image (batch)
             }
         }
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "apply_lightness_overlay"
-
     CATEGORY = "sikai nodes/postprocess"
 
     def apply_lightness_overlay(self, image_BW: torch.Tensor, image_Col: torch.Tensor):
         """
-        实现将图像A的明度叠加到图像B的色调上的效果。
-        图像B保持色调不变，图像A提供明度变化。
+        Applies the lightness from image_BW to the color of image_Col.
+        image_Col retains its color, and image_BW provides the lightness variations.
         """
-        # 将输入图像转换为 NumPy 格式
-        image_a_np = (image_BW[0].cpu().numpy() * 255).astype(np.uint8)
-        image_b_np = (image_Col[0].cpu().numpy() * 255).astype(np.uint8)
+        # Ensure images are on the same device
+        device = image_BW.device
+        image_Col = image_Col.to(device)
 
-        # Step 1: 转换为 Lab 色彩空间
-        lab_a = cv2.cvtColor(image_a_np, cv2.COLOR_RGB2LAB)  # 将图像A转换为Lab
-        lab_b = cv2.cvtColor(image_b_np, cv2.COLOR_RGB2LAB)  # 将图像B转换为Lab
+        # Print input image shapes
+        print(f"Original image_BW shape: {image_BW.shape}")
+        print(f"Original image_Col shape: {image_Col.shape}")
 
-        # Step 2: 替换图像B的亮度通道为图像A的亮度通道
-        # 完全用A图的L通道替换B图的L通道
-        lab_b[:, :, 0] = lab_a[:, :, 0]
+        # If images are in NHWC format, convert to NCHW
+        if image_BW.shape[-1] in [1, 3, 4]:
+            image_BW = image_BW.permute(0, 3, 1, 2)
+            image_Col = image_Col.permute(0, 3, 1, 2)
+            print("Permuted images to [batch_size, channels, height, width] format.")
 
-        # Step 3: 将修改后的Lab图像转换回RGB色彩空间
-        combined_image = cv2.cvtColor(lab_b, cv2.COLOR_LAB2RGB)
+        # Print adjusted shapes
+        print(f"image_BW shape after permute: {image_BW.shape}")
+        print(f"image_Col shape after permute: {image_Col.shape}")
 
-        # 将结果转换为 torch.Tensor 并归一化
-        combined_image_tensor = torch.tensor(combined_image).float() / 255
-        return (combined_image_tensor.unsqueeze(0),)
+        # Ensure images have 3 channels
+        if image_BW.shape[1] == 1:
+            image_BW = image_BW.repeat(1, 3, 1, 1)
+            print(f"Expanded image_BW to 3 channels: {image_BW.shape}")
+        elif image_BW.shape[1] == 4:
+            image_BW = image_BW[:, :3, :, :]
+            print(f"Trimmed image_BW to 3 channels: {image_BW.shape}")
+
+        if image_Col.shape[1] == 1:
+            image_Col = image_Col.repeat(1, 3, 1, 1)
+            print(f"Expanded image_Col to 3 channels: {image_Col.shape}")
+        elif image_Col.shape[1] == 4:
+            image_Col = image_Col[:, :3, :, :]
+            print(f"Trimmed image_Col to 3 channels: {image_Col.shape}")
+
+        # Ensure images have the same dtype and range
+        image_BW = image_BW.float() / 255.0 if image_BW.max() > 1 else image_BW.float()
+        image_Col = image_Col.float() / 255.0 if image_Col.max() > 1 else image_Col.float()
+
+        # Convert images to LAB color space
+        lab_bw = kornia.color.rgb_to_lab(image_BW)
+        lab_col = kornia.color.rgb_to_lab(image_Col)
+
+        # Replace the L channel of lab_col with that of lab_bw
+        lab_col[:, 0:1, :, :] = lab_bw[:, 0:1, :, :]
+
+        # Convert back to RGB
+        combined_img = kornia.color.lab_to_rgb(lab_col)
+
+        # Clamp values to [0, 1]
+        combined_img = torch.clamp(combined_img, 0.0, 1.0)
+
+        # Convert back to NHWC format if needed
+        combined_img = combined_img.permute(0, 2, 3, 1)
+        print(f"Output image shape: {combined_img.shape}")
+        print(f"Output image dtype: {combined_img.dtype}")
+
+        # **Move tensor to CPU before any NumPy conversion**
+        combined_img_cpu = combined_img.cpu()
+
+        # If you need to convert to NumPy array
+        output_img = combined_img_cpu.numpy()
+        print(f"Output image dtype after numpy conversion: {output_img.dtype}")
+
+        # Return the combined image tensor (still on CPU)
+        return (combined_img_cpu,)
+
 
 class LoadNemotron:
     def __init__(self):
@@ -573,3 +829,4 @@ class LoadNemotron:
 
         # 返回当前的对话历史
         return (self.conversation_history,)
+
